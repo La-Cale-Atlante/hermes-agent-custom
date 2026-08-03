@@ -1079,6 +1079,24 @@ def _is_internal_file_tool_content(content: str) -> bool:
     )
 
 
+def _get_remote_file_ops(task_id: str):
+    """Backend fichier distant (Soute) pour le fork satellite (D-22).
+
+    Construit/cache un ``RemoteHttpFileOperations`` depuis l'env (URL Soute + grant workspace
+    injectés par C3 au dispatch). Pas d'env sandbox. Cache par task_id (comme le chemin local).
+    """
+    from tools.remote_file_operations import RemoteHttpFileOperations
+
+    with _file_ops_lock:
+        cached = _file_ops_cache.get(task_id)
+        if isinstance(cached, RemoteHttpFileOperations):
+            return cached
+    ops = RemoteHttpFileOperations.from_env()
+    with _file_ops_lock:
+        _file_ops_cache[task_id] = ops
+    return ops
+
+
 def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
     """Get or create ShellFileOperations for a terminal environment.
 
@@ -1107,6 +1125,12 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
 
     raw_task_id = task_id or "default"
     task_id = _resolve_container_task_id(raw_task_id)
+
+    # Fork satellite fichier (D-22) : si HERMES_FILE_BACKEND=remote_http, les I/O fichier passent
+    # par l'API Soute (grant workspace) au lieu du FS local. Court-circuite la création d'env
+    # sandbox — le backend distant n'en a pas besoin.
+    if os.environ.get("HERMES_FILE_BACKEND", "").strip().lower() == "remote_http":
+        return _get_remote_file_ops(task_id)
 
     # Fast path: check cache -- but also verify the underlying environment
     # is still alive (it may have been killed by the cleanup thread).
