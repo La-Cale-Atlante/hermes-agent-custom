@@ -1,0 +1,17 @@
+name: axis-microsoft
+version: 0.1.0
+description: >-
+  Microsoft 365 connector for Axis. The agent calls the Microsoft Graph REST API through a single
+  authenticated tool; the request is signed with a SHORT-LIVED delegated access token minted on
+  demand by the Axis platform (the connectors service), from the user's consented account. The auth
+  is owned by Axis (OAuth client secret + refresh token stay in the platform); no credential ever
+  lands in the workspace and the model never sees a token. Additive by design: the tool only appears
+  when the connector is provisioned for the run (AXIS_CONNECTORS_URL + internal key present) — it
+  never shadows or removes any built-in tool.
+author: Axis
+kind: standalone
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - microsoft_graph
