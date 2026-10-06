@@ -1,0 +1,17 @@
+name: axis-github
+version: 0.1.0
+description: >-
+  GitHub connector for Axis. The agent calls the GitHub REST API through a single
+  authenticated tool; the request is signed with a SHORT-LIVED, repo-scoped GitHub App
+  installation token minted on demand by the Axis platform (the connectors service — the
+  auth is owned by Axis, never by the sandbox). No credential ever lands in the workspace
+  and the model never sees a token. Additive by design: the tool only appears when the
+  connector is provisioned for the run (AXIS_CONNECTORS_URL + internal key present) — it
+  never shadows or removes any built-in tool.
+author: Axis
+kind: standalone
+platforms:
+  - linux
+  - macos
+provides_tools:
+  - github_api
