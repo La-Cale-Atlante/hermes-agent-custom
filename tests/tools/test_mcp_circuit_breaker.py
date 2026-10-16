@@ -609,3 +609,44 @@ def test_breaker_opened_by_tool_errors_says_rejected_not_unreachable(monkeypatch
     finally:
         _cleanup(mcp_tool, "srv")
         mcp_tool._server_errors_all_application.pop("srv", None)
+
+
+def test_distinct_rejected_calls_never_pause_a_reachable_server(monkeypatch, tmp_path):
+    """A server that answers every call but refuses several DIFFERENT ones (a business refusal, a
+    bad id, then a bad date) must stay usable: the model is adapting to its answers. Only the same
+    call rejected again and again opens the breaker (#10447 still holds for that loop)."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool_handlers import _make_tool_handler
+
+    calls = []
+
+    async def _call_tool_refuses(name, arguments=None, **kw):
+        calls.append(arguments)
+        result = MagicMock()
+        result.is_error = True
+        block = MagicMock()
+        block.text = f"Refused: {arguments}"
+        result.content = [block]
+        result.structured_content = None
+        return result
+
+    _install_stub_server(mcp_tool, "srv", _call_tool_refuses)
+    _mcp_loop._ensure_mcp_loop()
+    try:
+        handler = _make_tool_handler("srv", "create_quote", 10.0)
+        for i in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD + 2):
+            out = json.loads(handler({"client": f"c-{i}"}))["error"]
+            assert "Refused" in out, out           # reached the server, never "paused"
+        assert len(calls) == mcp_tool._CIRCUIT_BREAKER_THRESHOLD + 2
+
+        mcp_tool._reset_server_error("srv")
+        for _ in range(mcp_tool._CIRCUIT_BREAKER_THRESHOLD):
+            handler({"client": "same"})
+        tripped = json.loads(handler({"client": "same"}))["error"].lower()
+        assert "rejected" in tripped and "paused" in tripped, tripped
+    finally:
+        _cleanup(mcp_tool, "srv")
+        mcp_tool._server_errors_all_application.pop("srv", None)
+        getattr(mcp_tool, "_server_last_rejected_call", {}).pop("srv", None)
