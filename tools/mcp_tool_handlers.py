@@ -147,14 +147,30 @@ def _result_is_error(result) -> bool:
         return False
 
 
-def _record_call_outcome(server_name: str, result) -> Any:
-    """Breaker bookkeeping: an error payload from the tool itself still counts as a strike (#10447),
-    flagged as an application error so the open-breaker message stays truthful."""
-    if _result_is_error(result):
-        _core._bump_server_error(server_name, application=True)
-    else:
+def _record_call_outcome(server_name: str, result, call_key: Optional[str] = None) -> Any:
+    """Breaker bookkeeping: an error payload from the tool itself counts as a strike (#10447), flagged
+    as an application error so the open-breaker message stays truthful. With *call_key* (tool +
+    arguments), only a repeat of the last rejected call extends the streak: a different call rejected
+    restarts it at one, so a server that keeps answering is never paused for refusing distinct calls."""
+    if not _result_is_error(result):
         _core._reset_server_error(server_name)
+        return result
+    if call_key is not None:
+        from tools.mcp_tool_scope import _resolve_server_key
+        key = _resolve_server_key(server_name)
+        if _core._server_last_rejected_call.get(key) != call_key:
+            _core._reset_server_error(server_name)
+            _core._server_last_rejected_call[key] = call_key
+    _core._bump_server_error(server_name, application=True)
     return result
+
+
+def _call_key(tool_name: str, args: Any) -> str:
+    """Identity of one tool call for the breaker: same tool, same arguments."""
+    try:
+        return tool_name + "\x00" + json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return tool_name + "\x00" + repr(args)
 
 
 def _strike(server_name: str, message: str, **extra) -> str:
@@ -325,7 +341,8 @@ def _handle_stdio_child_exited_and_retry(server_name: str, exc: Exception, retry
 
 
 def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float, recoverers,
-              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False) -> str:
+              on_final_failure: Callable[[BaseException], None], record_outcome: bool = False,
+              call_key: Optional[str] = None) -> str:
     """Mark the call started on *server* (doubles may lack ``mark_tool_call``), run coroutine function *call*
     on the MCP loop and, on failure, walk ``recoverers`` (``(server_name, exc, retry_call, op) -> Optional[str]``,
     None = not its kind; order matters). Unrecovered exceptions go through ``on_final_failure`` and become the
@@ -338,7 +355,7 @@ def _dispatch(server_name: str, server: Any, op: str, call, tool_timeout: float,
 
     try:
         result = call_once()
-        return _record_call_outcome(server_name, result) if record_outcome else result
+        return _record_call_outcome(server_name, result, call_key) if record_outcome else result
     except InterruptedError:
         return tool_error("MCP call interrupted: user sent a new message")
     except Exception as exc:
@@ -602,7 +619,7 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         text = _dispatch(
             server_name, server, op, _call, tool_timeout,
             (_handle_stdio_child_exited_and_retry, _handle_auth_error_and_retry, session_expired),
-            _on_failure, record_outcome=True)
+            _on_failure, record_outcome=True, call_key=_call_key(tool_name, args))
         # Off the MCP loop on purpose: image prep is CPU work (bounded vision pool) that must not stall other servers' I/O.
         return _mcp_result_with_native_images(text, image_paths) if native_images and not _result_is_error(text) else text
     return _handler

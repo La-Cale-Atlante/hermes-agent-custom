@@ -473,6 +473,10 @@ _server_breaker_opened_at: Dict[Any, float] = {}
 # True while every strike in the current streak was the tool's own error payload (server reachable,
 # call rejected); picks the open-breaker wording, since "unreachable" was false for that case (#11113).
 _server_errors_all_application: Dict[Any, bool] = {}
+# The last call (tool + arguments) the server rejected. Only a repeat of that same call extends an
+# application-error streak: different calls refused one after another mean the model is adapting to
+# the server's answers, and a reachable server must not be paused for that.
+_server_last_rejected_call: Dict[Any, str] = {}
 _CIRCUIT_BREAKER_THRESHOLD, _CIRCUIT_BREAKER_COOLDOWN_SEC = 3, 60.0
 
 # Trust-tier gating (``trust: full | untrusted``): on an untrusted server every write-capable
@@ -509,6 +513,7 @@ def _reset_server_error(server_name: str) -> None:
     _server_error_counts[key] = 0
     _server_breaker_opened_at.pop(key, None)
     _server_errors_all_application.pop(key, None)
+    _server_last_rejected_call.pop(key, None)
 
 
 # Servers opted into parallel tool calls, keyed by the consuming profile's own key (``foo-bar``/
